@@ -1,0 +1,131 @@
+<#
+
+Title: SysTrack User Profile Inventory Script
+Author: Mahipal Reddy Jalapu
+Version: 1.1
+Modified Date: 21/10/2025
+Purpose:
+This PowerShell script is designed to collect detailed information about local user profiles on a Windows system and send the data to SysTrack using the SysTrackPS module. It creates a custom inventory table named oldUserProfile and populates it with profile-related metrics such as username, profile path, hostname, profile size (in MB and GB), registry-based last load time, and days since last load.
+Key Features:
+
+Imports SysTrackPS.dll for SysTrack integration.
+Creates a new SysTrack inventory table with defined schema.
+Retrieves user profiles from Win32_UserProfile WMI class.
+Calculates profile size in MB and GB.
+Extracts registry-based profile load time and computes days since last load.
+Sends collected data to SysTrack in bulk for efficiency.
+Outputs the collected data in JSON format for verification.
+
+Workflow Overview:
+
+Import SysTrackPS module and set execution ID.
+Define table schema and add columns for user profile attributes.
+Collect user profile details using WMI and registry queries.
+Calculate profile sizes and last load metrics.
+Push data to SysTrack and display JSON output.
+Clean up by removing the SysTrackPS module.
+
+
+Disclaimer
+This script is intended solely for use with SysTrack and relies on the SysTrackPS.dll module for its functionality. It should not be used outside the SysTrack environment.
+#>
+
+
+# Import SysTrackPS module
+Import-Module -Name "C:\Program Files (x86)\SysTrack\LsiAgent\Utilities\SysTrackPS.dll"
+
+# Set execution ID
+Set-STExecutionID $args[0]
+
+# Create new table
+$tableId = New-STTable -Name "oldUserProfile" -Type "Inventory"
+
+# Add columns
+New-STColumn $tableId -Key $true -Property "Username" -Type "String"
+New-STColumn $tableId -Key $false -Property "ProfilePath" -Type "String"
+New-STColumn $tableId -Key $false -Property "Hostname" -Type "String"
+New-STColumn $tableId -Key $false -Property "ProfileSizeMB" -Type "Double"
+New-STColumn $tableId -Key $false -Property "ProfileSizeGB" -Type "Double"
+New-STColumn $tableId -Key $false -Property "RegistryLoadTime" -Type "String"
+New-STColumn $tableId -Key $false -Property "DaysSinceLastLoad" -Type "int"
+
+# Send the table schema to the agent
+Add-STTable $tableId
+
+Remove-Variable -Name profileDataList, profileDataArray -ErrorAction SilentlyContinue
+
+function Convert-RegistryFileTime {
+    param (
+        [uint32]$High,
+        [uint32]$Low
+    )
+    $fileTime = ([Int64]$High -shl 32) + $Low
+    return [DateTime]::FromFileTimeUtc($fileTime)
+}
+
+# Get current hostname
+$hostname = $env:COMPUTERNAME
+$date = Get-Date 
+
+# Initialize a strongly-typed list for bulk data
+$profileDataList = [System.Collections.Generic.List[object]]::new()
+
+# Get all user profiles
+$profiles = Get-WmiObject -Class Win32_UserProfile | Where-Object {
+    $_.LocalPath -like "C:\Users\*" -and $_.Special -eq $false
+}
+
+foreach ($profile in $profiles) {
+    $profilePath = $profile.LocalPath
+    $username = ($profilePath).Split("\")[-1]
+
+    # Get registry-based load time
+    $sid = $profile.SID
+    $regPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+    $registryLoadTime = "Unknown"
+    $daysSinceLastLoad = "Unknown"
+
+    if (Test-Path $regPath) {
+        $regProps = Get-ItemProperty -Path $regPath
+        if ($regProps.PSObject.Properties.Name -contains "LocalProfileLoadTimeHigh" -and
+            $regProps.PSObject.Properties.Name -contains "LocalProfileLoadTimeLow") {
+
+            $high = [uint32]$regProps.LocalProfileLoadTimeHigh
+            $low = [uint32]$regProps.LocalProfileLoadTimeLow
+
+            $registryLoadTimeDT = Convert-RegistryFileTime -High $high -Low $low
+            $registryLoadTime = $registryLoadTimeDT.ToString("dd/MM/yyyy")
+            $daysSinceLastLoad = ($date - $registryLoadTimeDT).Days
+        }
+    }
+
+    # Calculate profile size
+    $sizeBytes = (Get-ChildItem -Path $profilePath -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+    $sizeMB = if ($sizeBytes) { [math]::Round($sizeBytes / 1MB, 2) } else { 0 }
+    $sizeGB = if ($sizeBytes) { [math]::Round($sizeBytes / 1GB, 2) } else { 0 }
+
+    # Create profile data object
+    $profileData = [PSCustomObject]@{
+        Username           = $username
+        ProfilePath        = $profilePath
+        Hostname           = $hostname
+        ProfileSizeMB      = $sizeMB
+        ProfileSizeGB      = $sizeGB
+        RegistryLoadTime   = $registryLoadTime
+        DaysSinceLastLoad  = $daysSinceLastLoad
+    }
+
+    # Add to list
+    $profileDataList.Add($profileData)
+}
+
+# Add all collected data to the table in one call
+Add-STData -ID $tableId -Data $profileDataList
+
+# Convert profile data to JSON and display
+$jsonOutput = $profileDataList | ConvertTo-Json -Depth 3
+Write-Host "JSON Output:"
+Write-Host $jsonOutput
+
+# Clean up
+Remove-Module -Name SysTrackPS
