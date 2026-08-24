@@ -1,0 +1,86 @@
+<#
+.SYNOPSIS
+
+This script will clear Teams application cache
+
+Author: Mahipal Reddy J
+Version: 1.0
+Modification Date: 21/8/2025
+#>
+
+# Defining the log file path and Write-Log function
+
+$logfilepath = "$PSScriptRoot\PsexecLog.txt"
+$ErrorActionPreference = "Stop"
+
+$loggedinuser = ((Get-WmiObject -Class Win32_ComputerSystem).UserName -split '\\')[-1]
+
+function Write-Log {
+    param(
+        [string]$message
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logentry = "[$timestamp] $message"
+
+    Add-Content -Path $logfilepath -Value $logentry
+}
+
+
+# Path for Teams Classic & New Teams
+
+$classicpath = "C:\Users\$loggedinuser\AppData\Roaming\Microsoft\Teams"
+
+$newpath = "C:\Users\$loggedinuser\AppData\Local\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams"
+
+
+# Clear Classic Teams cache
+
+if (Test-Path $classicpath) {
+    try {
+
+        Get-Process -Name "*teams*" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+        Remove-Item "$classicpath" -Recurse -Force
+
+        Write-Log "Clearing Classic Teams cache"
+        Write-Host "Clearing Classic Teams cache"
+
+    }
+    catch {
+
+        Write-Log "Error clearing Classic Teams cache: $_"
+        Write-Host "Error clearing Classic Teams cache: $_"
+    }
+}
+else {
+
+    Write-Log "Path to Classic Teams cache is not found: $classicpath"
+    Write-Host "Path to Classic Teams cache is not found: $classicpath"
+}
+
+
+# Clear New Teams cache
+
+if (Test-Path $newpath) {
+    try {
+
+        Get-Process -Name "*teams*" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+        Remove-Item "$newpath" -Recurse -Force
+
+        Write-Log "Clearing New Teams cache"
+        Write-Host "Clearing New Teams cache"
+
+    }
+    catch {
+
+        Write-Log "Error clearing New Teams cache: $_"
+        Write-Host "Error clearing New Teams cache: $_"
+    }
+}
+else {
+
+    Write-Log "Path to New Teams cache is not found: $newpath"
+    Write-Host "Path to New Teams cache is not found: $newpath"
+}
